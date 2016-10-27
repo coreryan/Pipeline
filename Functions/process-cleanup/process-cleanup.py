@@ -16,7 +16,11 @@ def handler(event, context):
   print MASTER
   delete_dependencies(STACKS)
   delete_master(MASTER)
+  delete_artifacts(CONFIG['ARTIFACT_BUCKET'])
   print "DONE DELETING"
+def delete_artifacts(BUCKET):
+  s3 = boto3.client('s3')
+  s3.delete_object(BUCKET + '/templates')
 def pull_config(context):
   PULL_NAME = context.function_name.split('-')
   STACK_NAME = PULL_NAME[0]

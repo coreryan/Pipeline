@@ -2,13 +2,11 @@ import boto3, os, time, zipfile
 from subprocess import call
 from os.path import basename
 
-
-
-DEPLOY_DIR = '/Users/coreryan/Documents/Pipeline/Functions/'
+DEPLOY_DIR = '/Users/coreryan/Documents/Pipeline/MyRepo/Functions/'
 WRITE_DIR = '/Users/coreryan/Documents/Pipeline/Artifacts/'
-TEMPLATE_DIR = '/Users/coreryan/Documents/Pipeline/Templates/'
+TEMPLATE_DIR = '/Users/coreryan/Documents/Pipeline/MyRepo/Templates/'
 BUCKET = 'ctr-pipeline-artifacts'
-CURRENT_TEMPLATE = 'PipelineDev.yaml'
+CURRENT_TEMPLATE = 'Pipeline.yaml'
 TEMPLATE_URL = "https://" +  BUCKET + ".s3.amazonaws.com/" + CURRENT_TEMPLATE
 
 TO_DELETE = "aws s3 rm s3://" + BUCKET + " --recursive"

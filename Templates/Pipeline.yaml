@@ -4,9 +4,6 @@ Parameters:
   DeploymentBucket:
     Type: String
     Default: ctr-pipeline-artifacts
-Outputs:
-  Bucket:
-    Value: !Ref TemplateBucket
 Resources:
   TemplateBucket:
     Type: AWS::S3::Bucket
@@ -117,18 +114,17 @@ Resources:
         ZipFile: !Sub |
           import boto3, botocore, zipfile, os, urllib, base64, json
           def handler(event, context):
-            SERVICE = event['SERVICE']
-            print event
+            SERVICE = event['SERVICE'] # Figure out which folder in the repo to pull
             STAGING_BUCKET = '${TemplateBucket}'
             WD_NAME = "/tmp/"
             SOURCE_FILENAME = WD_NAME + "git.zip"
             #AWS REMOTE_ZIP_URL = "https://github.com/awslabs/aws-cloudformation-templates/archive/master.zip"
             REMOTE_ZIP_URL = "https://github.com/coreryan/cfn/archive/master.zip"
             TESTING_DIR = WD_NAME + "cfn-master/aws/services/" + SERVICE + "/"            
-            artifacts = get_artifacts(REMOTE_ZIP_URL, SOURCE_FILENAME)
-            unzip(SOURCE_FILENAME, WD_NAME)
-            STACK_NAME = process_files(TESTING_DIR, STAGING_BUCKET, SERVICE)
-            JSON = write_config(STACK_NAME, SERVICE, STAGING_BUCKET, WD_NAME)
+            artifacts = get_artifacts(REMOTE_ZIP_URL, SOURCE_FILENAME) # Get Files
+            unzip(SOURCE_FILENAME, WD_NAME) # Unzip them to /tmp
+            STACK_NAME = process_files(TESTING_DIR, STAGING_BUCKET, SERVICE) #Copy files to S3 and get Master Stack Info
+            JSON = write_config(STACK_NAME, SERVICE, STAGING_BUCKET, WD_NAME) #Write info to the S3 bucket for other Functions
             print "Initilizing finisehd. Invoking MessageStore"
             response = invoke_messagestore(JSON)
             print response

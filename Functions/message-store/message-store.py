@@ -1,9 +1,9 @@
 import json, boto3, time
 from boto3.dynamodb.conditions import Key, Attr
 def handler(event, context):    #10
-  print event
+  #print event
   config = pull_config(context)
-  print config
+  #print config
   try:
     event['INITIALRUN']
   except KeyError:
@@ -15,7 +15,7 @@ def handler(event, context):    #10
   return
 def initial_run(event, config):
   try:
-    print event
+    #print event
     TEMPLATE_URL = 'https://' + event['ARTIFACT_BUCKET'] + '.s3.amazonaws.com/templates/' + event['MASTER_STACK_NAME']['Full']
     STACK_NAME = "master-" + event['SERVICE']
     cfn = boto3.client('cloudformation')
@@ -31,7 +31,6 @@ def initial_run(event, config):
     raise
 def normal_run(event, CONFIG):
   CFN_DATA = parse_cfn(event)
-
   EVENT_TABLE = CONFIG['EVENT_TABLE']
   STATUS_TABLE = CONFIG['STATUS_TABLE']
   FAILED = "_FAILED"
@@ -39,7 +38,7 @@ def normal_run(event, CONFIG):
   RESOURCE_TYPE = CFN_DATA['ResourceType']
 
   if  "AWS::CloudFormation::Stack" in RESOURCE_TYPE: #20
-    print CFN_DATA
+    #print CFN_DATA
     if "CREATE_IN_PROGRESS" in CFN_DATA['ResourceStatus']:
       print "CREATE_IN_PROGRESS handler"
       ddb_status_write(STATUS_TABLE, CFN_DATA, "PENDING")
@@ -48,16 +47,14 @@ def normal_run(event, CONFIG):
       print "CREATE_COMPLETE HANDLER"
       ddb_event_write(EVENT_TABLE, CFN_DATA)
       if "master-" in CFN_DATA['StackName']: #If master stack is in CREATE_COMPLETE kick off the rest of the stacks
-        print "Master stack handler"
+        print "Master stack finished. Invoking Template processor"
         client = boto3.client('lambda')
         response = client.invoke(
           FunctionName=CONFIG['PROCESS_TEMPLATES'],
           InvocationType='RequestResponse', 
           LogType='None'
         )
-        print response
       else:
-        print "Checking for complete"
         check_for_complete(STATUS_TABLE, CONFIG['PROCESS_CLEANUP'])
     elif "DELETE_COMPLETE" in CFN_DATA['ResourceStatus']:
       print "DELETE_COMPLETE HANDLER"
@@ -100,6 +97,7 @@ def pull_config(context):
     StackName=STACK_NAME,
     LogicalResourceId='TemplateBucket'
   )
+  time.sleep(1)
   BUCKET = response['StackResourceDetail']['PhysicalResourceId']
   s3 = boto3.resource('s3')
   CONFIG = s3.Object(BUCKET,'config/config.txt')
@@ -109,7 +107,6 @@ def ddb_status_write(TABLE, CFN_DATA, CURRENT_STATUS):
   ddb = boto3.resource('dynamodb')
   table = ddb.Table(TABLE)
   print "Writing " + CFN_DATA['ResourceStatus']
-  
   table.put_item(
     Item={
       'StackId' : CFN_DATA['StackId'],
