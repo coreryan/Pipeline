@@ -1,0 +1,272 @@
+Parameters:
+  TimeStamp:
+    Type: String
+  DeploymentBucket:
+    Type: String
+    Default: ctr-pipeline-artifacts
+Outputs:
+  Bucket:
+    Value: !Ref TemplateBucket
+Resources:
+  TemplateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: ctr-pipeline-templates
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: GitHubTesting
+      Subscription: 
+      - 
+        Endpoint: !GetAtt MessageStore.Arn
+        Protocol: "lambda"
+  LambdaInvokePermissionSNS: 
+    Type: "AWS::Lambda::Permission"
+    Properties: 
+      FunctionName: !GetAtt MessageStore.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "sns.amazonaws.com"
+  LambdaInvokePermissionLambda: 
+    Type: "AWS::Lambda::Permission"
+    Properties: 
+      FunctionName: !GetAtt ProcessStreamsFunction.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "lambda.amazonaws.com"
+  LambdaStreamMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt DdbCfnEvents.StreamArn
+      FunctionName: !Ref ProcessStreamsFunction
+      StartingPosition: LATEST
+  DdbCfnStatus:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "STACK-STATUS"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "2"
+        WriteCapacityUnits: "2"
+      AttributeDefinitions:
+        -
+          AttributeName: "StackName"
+          AttributeType: "S"
+      KeySchema: 
+        - 
+          AttributeName: "StackName"
+          KeyType: "HASH"
+  DdbCfnEvents: 
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "PIPELINE-EVENTS"
+      AttributeDefinitions: 
+        - 
+          AttributeName: "StackId"
+          AttributeType: "S"
+        - 
+          AttributeName: "StampTime"
+          AttributeType: "S"
+        -
+          AttributeName: "StackName"
+          AttributeType: "S"
+        -
+          AttributeName: "ResourceType"
+          AttributeType: "S"
+      GlobalSecondaryIndexes: 
+        - 
+          IndexName: "ResourceType"
+          KeySchema:
+            - 
+              AttributeName: "ResourceType"
+              KeyType: "HASH"
+          ProvisionedThroughput: 
+            ReadCapacityUnits: "2"
+            WriteCapacityUnits: "2"
+          Projection:
+            ProjectionType: ALL
+        - 
+          IndexName: "StackName"
+          KeySchema:
+            - 
+              AttributeName: "StackName"
+              KeyType: "HASH"
+          ProvisionedThroughput: 
+            ReadCapacityUnits: "2"
+            WriteCapacityUnits: "2"
+          Projection:
+            ProjectionType: ALL
+      KeySchema: 
+        - 
+          AttributeName: "StackId"
+          KeyType: "HASH"
+        - 
+          AttributeName: "StampTime"
+          KeyType: "RANGE"
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "2"
+        WriteCapacityUnits: "2"
+  InitiateWorkflowFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: "arn:aws:iam::637373608798:role/LambdaTest"
+      Runtime: python2.7
+      Timeout: 30
+      Code:
+        ZipFile: !Sub |
+          import boto3, botocore, zipfile, os, urllib, base64, json
+          def handler(event, context):
+            SERVICE = event['SERVICE']
+            print event
+            STAGING_BUCKET = '${TemplateBucket}'
+            WD_NAME = "/tmp/"
+            SOURCE_FILENAME = WD_NAME + "git.zip"
+            #AWS REMOTE_ZIP_URL = "https://github.com/awslabs/aws-cloudformation-templates/archive/master.zip"
+            REMOTE_ZIP_URL = "https://github.com/coreryan/cfn/archive/master.zip"
+            TESTING_DIR = WD_NAME + "cfn-master/aws/services/" + SERVICE + "/"            
+            artifacts = get_artifacts(REMOTE_ZIP_URL, SOURCE_FILENAME)
+            unzip(SOURCE_FILENAME, WD_NAME)
+            STACK_NAME = process_files(TESTING_DIR, STAGING_BUCKET, SERVICE)
+            JSON = write_config(STACK_NAME, SERVICE, STAGING_BUCKET, WD_NAME)
+            print "Initilizing finisehd. Invoking MessageStore"
+            response = invoke_messagestore(JSON)
+            print response
+          def invoke_messagestore(JSON):
+            client = boto3.client('lambda')
+            response = client.invoke(
+              FunctionName='${MessageStore}',
+              InvocationType='RequestResponse', 
+              LogType='None',
+              Payload=json.dumps(JSON)
+            )
+            return response
+          def write_config(STACK_NAME, SERVICE, STAGING_BUCKET, WD):
+            JSON = {}
+            JSON['SERVICE'] = SERVICE
+            JSON['SNSTOPIC'] = '${SNSTopic}'
+            JSON['MASTER_STACK_NAME'] = STACK_NAME
+            JSON['PROCESS_STREAMS'] = '${ProcessStreamsFunction}'
+            JSON['PROCESS_CLEANUP'] = '${ProcessCleanUp}'
+            JSON['MESSAGE_STORE'] = '${MessageStore}'
+            JSON['PROCESS_TEMPLATES'] = '${ProcessAllTemplatesFunction}'
+            JSON['ARTIFACT_BUCKET'] = '${TemplateBucket}'
+            JSON['EVENT_TABLE'] = '${DdbCfnEvents}'
+            JSON['STATUS_TABLE'] = '${DdbCfnStatus}'
+            with open(WD + 'config.txt', 'w') as outfile:
+              json.dump(JSON, outfile)
+            s3 = boto3.resource('s3')
+            s3.meta.client.upload_file(WD + 'config.txt', STAGING_BUCKET, 'config/config.txt')
+            JSON['INITIALRUN'] = 'TRUE'
+            return JSON
+          def get_artifacts(URL, FILENAME):
+            try:
+              result = urllib.urlretrieve(URL, FILENAME)
+            except:
+              raise
+            return result
+          def unzip(FILENAME, WD):
+            try:
+              zipfile.ZipFile(FILENAME).extractall(WD)
+            except:
+              raise
+            return
+
+          def spin_stack(WD, FULL, NAME):
+            try:
+              TO_TEST = WD + FULL
+              with open(TO_TEST, 'r') as f:
+                BODY = f.read()
+              cfn = boto3.client('cloudformation')
+              response = cfn.create_stack(
+                StackName = NAME,
+                TemplateBody = BODY,
+                NotificationARNs=['SNSTOPICREPLACE'],
+                Capabilities = ['CAPABILITY_NAMED_IAM'],
+                OnFailure = 'DO_NOTHING'
+              )
+              return response
+            except:
+              raise
+
+          def process_files(WD, BUCKET, SERVICE):
+            s3 = boto3.resource('s3')
+            MASTER_CHECK = "master-" + SERVICE 
+            MASTER_TEMPLATE = {}
+            print os.listdir(WD)
+            for file in os.listdir(WD):
+              filename, file_extension = os.path.splitext(file)
+              if (file_extension == ".json" ) or (file_extension == ".yaml") or (file_extension == ".template"):
+                TO_TEST = WD + "/" + file
+                if MASTER_CHECK in filename:
+                    MASTER_TEMPLATE['Full'] = file
+                    MASTER_TEMPLATE['Name'] = filename
+                s3.meta.client.upload_file(TO_TEST, BUCKET, 'templates/'+file)
+              else:
+                print "Skipping " + file + " " + file_extension + " is not a valid extension."
+            return MASTER_TEMPLATE
+          def check_for_master(STACK_NAME):
+            try:
+              cfn = boto3.client('cloudformation')
+              response = cfn.describe_stacks(StackName=STACK_NAME)
+              return True
+            except botocore.exceptions.ClientError as e:
+              print e.response['ResponseMetadata']['HTTPStatusCode']
+              return False
+        
+  ProcessCleanUp:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: process-cleanup.handler
+      Role: "arn:aws:iam::637373608798:role/LambdaTest"
+      Runtime: python2.7
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key:
+          !Sub
+            - "process-cleanup${TimeStamp}.zip"
+            - TimeStamp : !Ref TimeStamp
+       
+  ProcessAllTemplatesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: process-templates.handler
+      Role: "arn:aws:iam::637373608798:role/LambdaTest"
+      Runtime: python2.7
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key:
+          !Sub
+            - "process-all-templates${TimeStamp}.zip"
+            - TimeStamp : !Ref TimeStamp
+
+  ProcessStreamsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: process-streams.handler
+      Role: "arn:aws:iam::637373608798:role/LambdaTest"
+      Runtime: python2.7
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key:
+          !Sub
+            - "process-streams${TimeStamp}.zip"
+            - TimeStamp : !Ref TimeStamp
+          
+  MessageStore:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: message-store.handler
+      Role: "arn:aws:iam::637373608798:role/LambdaTest"
+      Runtime: python2.7
+      Timeout: 30
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key:
+          !Sub
+            - "message-store${TimeStamp}.zip"
+            - TimeStamp : !Ref TimeStamp
+          

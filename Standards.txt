@@ -1,0 +1,6 @@
+Standards:
+    Fully Formed Templates
+    Ending in .template .json .yaml
+    All Parameters need a Default
+        If don't want to include Default have it pull the value from an ImportValue
+    
